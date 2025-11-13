@@ -3,6 +3,15 @@ use crate::core::*;
 use egui_glow::Painter;
 use std::cell::RefCell;
 
+#[cfg(not(target_arch = "wasm32"))]
+use arboard::Clipboard as SystemClipboard;
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+use std::rc::Rc;
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+use wasm_bindgen_futures::{spawn_local, JsFuture};
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+use web_sys::Clipboard as WebClipboard;
+
 #[doc(hidden)]
 pub use egui;
 
@@ -15,6 +24,7 @@ pub struct GUI {
     output: RefCell<Option<egui::FullOutput>>,
     viewport: Viewport,
     modifiers: Modifiers,
+    clipboard: ClipboardManager,
 }
 
 impl GUI {
@@ -36,6 +46,7 @@ impl GUI {
             output: RefCell::new(None),
             viewport: Viewport::new_at_origo(1, 1),
             modifiers: Modifiers::default(),
+            clipboard: ClipboardManager::new(),
         }
     }
 
@@ -61,6 +72,122 @@ impl GUI {
     ) -> bool {
         self.egui_context.set_pixels_per_point(device_pixel_ratio);
         self.viewport = viewport;
+        let mut egui_events = Vec::new();
+        if let Some(paste) = self.clipboard.take_pending_paste() {
+            egui_events.push(egui::Event::Paste(paste));
+        }
+        for event in events.iter() {
+            match event {
+                Event::KeyPress {
+                    kind,
+                    modifiers,
+                    handled,
+                } => {
+                    if !handled {
+                        if is_paste_command(modifiers, kind) {
+                            if let Some(text) = self.clipboard.request_paste() {
+                                egui_events.push(egui::Event::Paste(text));
+                            }
+                        }
+                        egui_events.push(egui::Event::Key {
+                            key: kind.into(),
+                            pressed: true,
+                            modifiers: modifiers.into(),
+                            repeat: false,
+                            physical_key: None,
+                        });
+                    }
+                }
+                Event::KeyRelease {
+                    kind,
+                    modifiers,
+                    handled,
+                } => {
+                    if !handled {
+                        egui_events.push(egui::Event::Key {
+                            key: kind.into(),
+                            pressed: false,
+                            modifiers: modifiers.into(),
+                            repeat: false,
+                            physical_key: None,
+                        });
+                    }
+                }
+                Event::MousePress {
+                    button,
+                    position,
+                    modifiers,
+                    handled,
+                } => {
+                    if !handled {
+                        egui_events.push(egui::Event::PointerButton {
+                            pos: egui::Pos2 {
+                                x: position.x / device_pixel_ratio,
+                                y: (viewport.height as f32 - position.y) / device_pixel_ratio,
+                            },
+                            button: button.into(),
+                            pressed: true,
+                            modifiers: modifiers.into(),
+                        });
+                    }
+                }
+                Event::MouseRelease {
+                    button,
+                    position,
+                    modifiers,
+                    handled,
+                } => {
+                    if !handled {
+                        egui_events.push(egui::Event::PointerButton {
+                            pos: egui::Pos2 {
+                                x: position.x / device_pixel_ratio,
+                                y: (viewport.height as f32 - position.y) / device_pixel_ratio,
+                            },
+                            button: button.into(),
+                            pressed: false,
+                            modifiers: modifiers.into(),
+                        });
+                    }
+                }
+                Event::MouseMotion {
+                    position, handled, ..
+                } => {
+                    if !handled {
+                        egui_events.push(egui::Event::PointerMoved(egui::Pos2 {
+                            x: position.x / device_pixel_ratio,
+                            y: (viewport.height as f32 - position.y) / device_pixel_ratio,
+                        }));
+                    }
+                }
+                Event::Text(text) => {
+                    egui_events.push(egui::Event::Text(text.clone()));
+                }
+                Event::MouseLeave => {
+                    egui_events.push(egui::Event::PointerGone);
+                }
+                Event::MouseWheel {
+                    delta,
+                    handled,
+                    modifiers,
+                    ..
+                } => {
+                    if !handled {
+                        egui_events.push(egui::Event::MouseWheel {
+                            delta: egui::Vec2::new(delta.0, delta.1),
+                            unit: egui::MouseWheelUnit::Point,
+                            modifiers: modifiers.into(),
+                        });
+                    }
+                }
+                Event::PinchGesture { delta, handled, .. } => {
+                    if !handled {
+                        egui_events.push(egui::Event::Zoom(delta.exp()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let egui_input = egui::RawInput {
             screen_rect: Some(egui::Rect {
                 min: egui::Pos2 {
@@ -76,129 +203,15 @@ impl GUI {
             }),
             time: Some(accumulated_time_in_ms * 0.001),
             modifiers: (&self.modifiers).into(),
-            events: events
-                .iter()
-                .filter_map(|event| match event {
-                    Event::KeyPress {
-                        kind,
-                        modifiers,
-                        handled,
-                    } => {
-                        if !handled {
-                            Some(egui::Event::Key {
-                                key: kind.into(),
-                                pressed: true,
-                                modifiers: modifiers.into(),
-                                repeat: false,
-                                physical_key: None,
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    Event::KeyRelease {
-                        kind,
-                        modifiers,
-                        handled,
-                    } => {
-                        if !handled {
-                            Some(egui::Event::Key {
-                                key: kind.into(),
-                                pressed: false,
-                                modifiers: modifiers.into(),
-                                repeat: false,
-                                physical_key: None,
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    Event::MousePress {
-                        button,
-                        position,
-                        modifiers,
-                        handled,
-                    } => {
-                        if !handled {
-                            Some(egui::Event::PointerButton {
-                                pos: egui::Pos2 {
-                                    x: position.x / device_pixel_ratio,
-                                    y: (viewport.height as f32 - position.y) / device_pixel_ratio,
-                                },
-                                button: button.into(),
-                                pressed: true,
-                                modifiers: modifiers.into(),
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    Event::MouseRelease {
-                        button,
-                        position,
-                        modifiers,
-                        handled,
-                    } => {
-                        if !handled {
-                            Some(egui::Event::PointerButton {
-                                pos: egui::Pos2 {
-                                    x: position.x / device_pixel_ratio,
-                                    y: (viewport.height as f32 - position.y) / device_pixel_ratio,
-                                },
-                                button: button.into(),
-                                pressed: false,
-                                modifiers: modifiers.into(),
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    Event::MouseMotion {
-                        position, handled, ..
-                    } => {
-                        if !handled {
-                            Some(egui::Event::PointerMoved(egui::Pos2 {
-                                x: position.x / device_pixel_ratio,
-                                y: (viewport.height as f32 - position.y) / device_pixel_ratio,
-                            }))
-                        } else {
-                            None
-                        }
-                    }
-                    Event::Text(text) => Some(egui::Event::Text(text.clone())),
-                    Event::MouseLeave => Some(egui::Event::PointerGone),
-                    Event::MouseWheel {
-                        delta,
-                        handled,
-                        modifiers,
-                        ..
-                    } => {
-                        if !handled {
-                            Some(egui::Event::MouseWheel {
-                                delta: egui::Vec2::new(delta.0, delta.1),
-                                unit: egui::MouseWheelUnit::Point,
-                                modifiers: modifiers.into(),
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    Event::PinchGesture { delta, handled, .. } => {
-                        if !handled {
-                            Some(egui::Event::Zoom(delta.exp()))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
+            events: egui_events,
             ..Default::default()
         };
 
         self.egui_context.begin_pass(egui_input);
         callback(&self.egui_context);
-        *self.output.borrow_mut() = Some(self.egui_context.end_pass());
+        let output = self.egui_context.end_pass();
+        self.handle_platform_output(&output.platform_output);
+        *self.output.borrow_mut() = Some(output);
 
         for event in events.iter_mut() {
             if let Event::ModifiersChange { modifiers } = event {
@@ -284,6 +297,12 @@ impl GUI {
             self.painter.borrow().gl().disable(glow::FRAMEBUFFER_SRGB);
         }
         Ok(())
+    }
+
+    fn handle_platform_output(&mut self, platform_output: &egui::PlatformOutput) {
+        if !platform_output.copied_text.is_empty() {
+            self.clipboard.set_text(&platform_output.copied_text);
+        }
     }
 }
 
@@ -373,4 +392,122 @@ impl From<&MouseButton> for egui::PointerButton {
             MouseButton::Middle => egui::PointerButton::Middle,
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ClipboardManager {
+    clipboard: Option<SystemClipboard>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ClipboardManager {
+    fn new() -> Self {
+        Self {
+            clipboard: SystemClipboard::new().ok(),
+        }
+    }
+
+    fn set_text(&mut self, text: &str) {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            if clipboard.set_text(text.to_owned()).is_ok() {
+                return;
+            }
+        }
+        self.clipboard = SystemClipboard::new().ok();
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            let _ = clipboard.set_text(text.to_owned());
+        }
+    }
+
+    fn request_paste(&mut self) -> Option<String> {
+        self.get_text()
+    }
+
+    fn take_pending_paste(&mut self) -> Option<String> {
+        None
+    }
+
+    fn get_text(&mut self) -> Option<String> {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            match clipboard.get_text() {
+                Ok(text) => return Some(text),
+                Err(_) => {
+                    self.clipboard = SystemClipboard::new().ok();
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+struct ClipboardManager {
+    pending_paste: Rc<RefCell<Option<String>>>,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+impl ClipboardManager {
+    fn new() -> Self {
+        Self {
+            pending_paste: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn set_text(&mut self, text: &str) {
+        if let Some(clipboard) = Self::clipboard() {
+            if let Ok(promise) = clipboard.write_text(text) {
+                spawn_local(async move {
+                    let _ = JsFuture::from(promise).await;
+                });
+            }
+        }
+    }
+
+    fn request_paste(&mut self) -> Option<String> {
+        if let Some(clipboard) = Self::clipboard() {
+            if let Ok(promise) = clipboard.read_text() {
+                let pending = self.pending_paste.clone();
+                spawn_local(async move {
+                    if let Ok(value) = JsFuture::from(promise).await {
+                        if let Some(text) = value.as_string() {
+                            *pending.borrow_mut() = Some(text);
+                        }
+                    }
+                });
+            }
+        }
+        None
+    }
+
+    fn take_pending_paste(&mut self) -> Option<String> {
+        self.pending_paste.borrow_mut().take()
+    }
+
+    fn clipboard() -> Option<WebClipboard> {
+        web_sys::window()?.navigator().clipboard().ok()
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "window")))]
+struct ClipboardManager;
+
+#[cfg(all(target_arch = "wasm32", not(feature = "window")))]
+impl ClipboardManager {
+    fn new() -> Self {
+        Self
+    }
+
+    fn set_text(&mut self, _text: &str) {}
+
+    fn request_paste(&mut self) -> Option<String> {
+        None
+    }
+
+    fn take_pending_paste(&mut self) -> Option<String> {
+        None
+    }
+}
+
+fn is_paste_command(modifiers: &Modifiers, key: &Key) -> bool {
+    modifiers.command && matches!(key, Key::V)
 }
