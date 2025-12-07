@@ -3,6 +3,7 @@ use crate::core::texture::*;
 ///
 /// A 2D texture, basically an image that is transferred to the GPU.
 ///
+#[derive(Clone)]
 pub struct Texture2D {
     context: Context,
     id: crate::context::Texture,

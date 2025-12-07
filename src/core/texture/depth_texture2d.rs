@@ -3,6 +3,7 @@ use crate::core::texture::*;
 ///
 /// A 2D depth texture that can be rendered into and read from. See also [RenderTarget] and [DepthTarget].
 ///
+#[derive(Clone)]
 pub struct DepthTexture2D {
     context: Context,
     id: crate::context::Texture,
