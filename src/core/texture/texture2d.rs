@@ -144,6 +144,12 @@ impl Texture2D {
         self.height
     }
 
+     /// The id of this texture.
+    pub fn id(&self) -> crate::context::Texture {
+        self.id
+    }
+
+
     /// The number of mip maps of this texture.
     pub fn number_of_mip_maps(&self) -> u32 {
         self.number_of_mip_maps
