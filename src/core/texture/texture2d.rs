@@ -235,10 +235,10 @@ impl Texture2D {
     }
 }
 
-impl Drop for Texture2D {
-    fn drop(&mut self) {
-        unsafe {
-            self.context.delete_texture(self.id);
-        }
-    }
-}
+// impl Drop for Texture2D {
+//     fn drop(&mut self) {
+//         unsafe {
+//             self.context.delete_texture(self.id);
+//         }
+//     }
+// }

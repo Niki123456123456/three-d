@@ -90,10 +90,10 @@ impl DepthTexture2D {
     }
 }
 
-impl Drop for DepthTexture2D {
-    fn drop(&mut self) {
-        unsafe {
-            self.context.delete_texture(self.id);
-        }
-    }
-}
+// impl Drop for DepthTexture2D {
+//     fn drop(&mut self) {
+//         unsafe {
+//             self.context.delete_texture(self.id);
+//         }
+//     }
+// }
