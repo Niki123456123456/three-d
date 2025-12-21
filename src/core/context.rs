@@ -13,7 +13,7 @@ pub use crate::context::HasContext;
 ///
 #[derive(Clone)]
 pub struct Context {
-    context: Arc<crate::context::Context>,
+    pub context: Arc<crate::context::Context>,
     pub(super) vao: crate::context::VertexArray,
     /// A cache of programs to avoid recompiling a [Program] every frame.
     pub programs: Arc<RwLock<HashMap<Vec<u8>, Program>>>,
